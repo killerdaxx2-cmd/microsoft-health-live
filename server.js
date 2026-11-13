@@ -41,13 +41,37 @@ async function mmChunk(chunk) {
     signal: AbortSignal.timeout(12000),
     headers: {Accept: 'application/json'}
   });
-  if (!r.ok) throw Error('HTTP ' + r.status);
+  if (!r.ok) throw Error('mymemory HTTP ' + r.status);
   const j = await r.json();
   const t = unescape(j?.responseData?.translatedText || '').trim();
   if (Number(j?.responseStatus) !== 200 || !t || /MYMEMORY WARNING/i.test(t)) {
-    throw Error(String(j?.responseDetails || 'tradução indisponível'));
+    throw Error('mymemory ' + String(j?.responseDetails || 'sem tradução'));
   }
   return t;
+}
+
+// Google Translate sem chave (endpoint público usado por extensões; pode ser bloqueado por IP)
+async function gtxChunk(chunk) {
+  const url = 'https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=pt&dt=t&q=' + encodeURIComponent(chunk);
+  const r = await fetch(url, {
+    signal: AbortSignal.timeout(8000),
+    headers: {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)', Accept: '*/*'}
+  });
+  if (!r.ok) throw Error('gtx HTTP ' + r.status);
+  const j = await r.json();
+  const t = Array.isArray(j?.[0]) ? j[0].map(s => (Array.isArray(s) && s[0]) || '').join('') : '';
+  if (!t.trim()) throw Error('gtx resposta vazia');
+  return unescape(t);
+}
+
+const PROVIDERS = [gtxChunk, mmChunk];
+
+async function translateChunk(chunk) {
+  const errs = [];
+  for (const p of PROVIDERS) {
+    try { return await p(chunk); } catch (e) { errs.push(String(e?.message || e)); }
+  }
+  throw Error(errs.join(' | '));
 }
 
 async function translate(text, budgetMs = 12000) {
@@ -59,7 +83,7 @@ async function translate(text, budgetMs = 12000) {
     const h = createHash('md5').update(c).digest('hex');
     if (trCache.has(h)) { out.push(trCache.get(h)); continue; }
     if (Date.now() - start > budgetMs) throw Error('orçamento de tempo esgotado');
-    const t = await mmChunk(c);
+    const t = await translateChunk(c);
     trCache.set(h, t);
     if (trCache.size > 500) trCache.delete(trCache.keys().next().value); // remove o mais antigo
     out.push(t);
