@@ -1,5 +1,6 @@
 import http from 'node:http';
 import {readFile} from 'node:fs/promises';
+import {createHash} from 'node:crypto';
 
 const SOURCES = [
   {key: 'mac', name: 'Microsoft 365 corporativo / Admin Center', url: 'https://status.cloud.microsoft/api/posts/mac'},
@@ -13,6 +14,63 @@ const clean = v => String(v ?? '')
   .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
   .replace(/&quot;/g, '"').replace(/&#0?39;/g, "'")
   .replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+
+// ---- Tradução pt-BR (MyMemory, público e sem chave; em falha mantém o original em inglês) ----
+const MM_URL = 'https://api.mymemory.translated.net/get?langpair=en|pt&q=';
+const trCache = new Map(); // hash do trecho -> tradução (só retraduz quando o texto muda)
+
+const unescape = s => String(s ?? '')
+  .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+  .replace(/&quot;/g, '"').replace(/&#0?39;/g, "'").replace(/&#x27;/g, "'");
+
+function chunksOf(text, size = 480) {
+  const out = [];
+  let rest = text;
+  while (rest.length > size) {
+    let cut = rest.lastIndexOf(' ', size);
+    if (cut < size * 0.5) cut = size;
+    out.push(rest.slice(0, cut));
+    rest = rest.slice(cut).trimStart();
+  }
+  if (rest) out.push(rest);
+  return out;
+}
+
+async function mmChunk(chunk) {
+  const r = await fetch(MM_URL + encodeURIComponent(chunk), {
+    signal: AbortSignal.timeout(12000),
+    headers: {Accept: 'application/json'}
+  });
+  if (!r.ok) throw Error('HTTP ' + r.status);
+  const j = await r.json();
+  const t = unescape(j?.responseData?.translatedText || '').trim();
+  if (Number(j?.responseStatus) !== 200 || !t || /MYMEMORY WARNING/i.test(t)) {
+    throw Error(String(j?.responseDetails || 'tradução indisponível'));
+  }
+  return t;
+}
+
+async function translate(text, budgetMs = 12000) {
+  if (!text) return text;
+  const parts = chunksOf(text);
+  const out = [];
+  const start = Date.now();
+  for (const c of parts) {
+    const h = createHash('md5').update(c).digest('hex');
+    if (trCache.has(h)) { out.push(trCache.get(h)); continue; }
+    if (Date.now() - start > budgetMs) throw Error('orçamento de tempo esgotado');
+    const t = await mmChunk(c);
+    trCache.set(h, t);
+    if (trCache.size > 500) trCache.delete(trCache.keys().next().value); // remove o mais antigo
+    out.push(t);
+    await new Promise(res => setTimeout(res, 120));
+  }
+  return out.join(' ');
+}
+
+const safeTranslate = async text => {
+  try { return await translate(text); } catch { return text; } // falha: exibe o original
+};
 
 async function fetchWithRetry(url) {
   let lastErr;
@@ -77,6 +135,15 @@ async function collect() {
   }
 
   entries.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+
+  // traduz avisos em paralelo (cache por trecho: só retraduz o que mudou desde a última atualização)
+  await Promise.all(entries.map(async e => {
+    e.title = await safeTranslate(e.title);
+    e.description = await safeTranslate(e.description);
+  }));
+  await Promise.all(Object.values(services).map(async s => {
+    if (s.incidentTitle) s.incidentTitle = await safeTranslate(s.incidentTitle);
+  }));
 
   // feed do consumidor é uma lista por serviço: deriva um status agregado
   if (sources.m365Consumer && sources.m365Consumer.ok) {
