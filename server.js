@@ -68,8 +68,17 @@ async function translate(text, budgetMs = 12000) {
   return out.join(' ');
 }
 
+const trErrors = new Map(); // msg -> última vez logada (evita repetir o mesmo erro no log)
 const safeTranslate = async text => {
-  try { return await translate(text); } catch { return text; } // falha: exibe o original
+  try { return await translate(text); } catch (e) {
+    const msg = String(e?.message || e);
+    const last = trErrors.get(msg) || 0;
+    if (Date.now() - last > 10 * 60 * 1000) {
+      trErrors.set(msg, Date.now());
+      console.warn('tradução indisponível, exibindo original:', msg);
+    }
+    return text;
+  }
 };
 
 async function fetchWithRetry(url) {
