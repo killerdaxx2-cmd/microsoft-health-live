@@ -14,13 +14,23 @@ const clean = v => String(v ?? '')
   .replace(/&quot;/g, '"').replace(/&#0?39;/g, "'")
   .replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
 
+async function fetchWithRetry(url) {
+  let lastErr;
+  for (let i = 0; i < 2; i++) {
+    try {
+      const r = await fetch(url, {signal: AbortSignal.timeout(15000), headers: {Accept: 'application/json'}});
+      if (!r.ok) throw Error('HTTP ' + r.status);
+      return await r.json();
+    } catch (e) { lastErr = e; if (i === 0) await new Promise(res => setTimeout(res, 1500)); }
+  }
+  throw lastErr;
+}
+
 async function collect() {
   const checkedAt = new Date().toISOString();
   const parts = await Promise.all(SOURCES.map(async s => {
     try {
-      const r = await fetch(s.url, {signal: AbortSignal.timeout(15000), headers: {Accept: 'application/json'}});
-      if (!r.ok) throw Error('HTTP ' + r.status);
-      return {s, data: await r.json()};
+      return {s, data: await fetchWithRetry(s.url)};
     } catch (e) { return {s, err: e.message}; }
   }));
 
