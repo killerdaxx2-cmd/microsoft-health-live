@@ -1,2 +1,2 @@
-# microsoft-health-live
-Painel minimalista de avisos públicos de saúde dos serviços Microsoft, com atualização automática. Sem credenciais no código.
+# Microsoft Health Live
+Painel independente de avisos públicos. Node.js 22+. Execute npm install e npm start. Consulta RSS/Atom no servidor a cada 30 segundos, sem credenciais Microsoft. Fonte: https://status.cloud.microsoft/api/feed/mac . Endpoint público de dados: /api/status . Não equivale a um inventário de status por serviço. Feed indisponível aparece como sem confirmação. Não há histórico de uptime inventado.
